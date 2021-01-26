@@ -1,0 +1,468 @@
+$yearinsec = 365.25*24*60*60 
+$MPainPa = 1.0e6 
+$rhoi = 917.0/(MPainPa*yearinsec^2) 
+$gravity = 9.80*yearinsec^2
+$nGlen = 3
+$ZbEnd = 337 !Altitude of the bedrock downstream, m
+$TubeSurf = 5000 !surface of the tube, m2
+$acc={ACC} !accumulation, m/a
+$h = 1000
+$ function capacity(T) { _capacity=146.3+(7.253*T)}
+$ function conductivity(T)  { _conductivity=9.828*exp(-5.7E-03*T)}
+$ function pressuremeltingpoint(PIN) {\
+  P = PIN;\
+  if (P<0.0) P=0.0;\
+  beta=9.8E-08*1.0E06;\
+  _pressuremeltingpoint=273.15-(beta*P);\
+}
+$ function slidingcoeff(x) {\
+C=1e3;\
+if (x > 0) C=1e-4;\
+_slidingcoeff=C;\
+}
+
+
+Header
+  Mesh DB "." "stream_ftw"
+End
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+Simulation
+  Coordinate System  = Cartesian 2D
+  Simulation Type = Transient
+
+  Timestepping Method = "bdf"
+  BDF Order = 1
+  ! There is a bunch of crap here to get nice outputs
+  Output Intervals(4) = 1 10 10 1
+  Timestep Intervals(4) = 1 9 2501 50000
+  Timestep Sizes(4) = 0.0001 1.0 1.0 10.0
+
+  Steady State Min Iterations = 1
+  Steady State Max Iterations = 5
+
+  Output File = "a_{conv}_rc{rc}_oop{oop}_bm{bm}.result"
+  Post File = "a_{conv}_rc{rc}_oop{oop}_bm{bm}_.vtu"
+  Restart File = "s_{conv}_rc{rc}_oop{oop}_bm{bm}.result"
+  Restart Position = 0
+  max output level = 3
+
+  Initialize Dirichlet Conditions = Logical False
+End
+
+Body 1
+  Equation = 1
+  Body Force = 1
+  Material = 1
+  Initial Condition = 1
+End
+
+!top
+Body 2
+  Equation = 2
+  Body Force = 2
+  Material = 1
+  Initial Condition = 2
+End
+
+Constants
+   Gas Constant = Real 8.314
+End
+
+!%%%%%%%%%%%%%%%%%%%%%      Body Force
+Body Force 1
+  AIFlow Force 1 = Real 0.0
+  AIFlow Force 2 = Real $-rhoi*gravity  ! body force, i.e. gravity * density
+  DGAge Source = Real 1.0  ! result in years
+
+  ! OOP13 = Variable dudy, AIFlow 1, ExportedAIFlow, roc
+  !   Real Procedure "SIA_BC" "OOP13"
+  OOP13 = Real 0.0
+  Temp Volume Source = Equals W
+End
+
+Body Force 2
+  Zs Top Accumulation Flux 1 = Real 0.0
+  Zs Top Accumulation Flux 2 = Real $acc
+End
+
+!%%%%%%%%%%%%%%%%%%%%%      Material
+Material 1
+  Name = "Ice"
+  !Constant Temperature = Real -10.0
+  Powerlaw Exponent = Real 3.0         ! sqrt(tr(S^2/2))^n if AIFlow_nlS2 sqrt(tr(2D^2))^(1/n-1) if  AIFlow_nlD2
+  Min Second Invariant = Real 1.0e-10  ! Min value for the second invariant of strain-rates
+  Reference Temperature = Real -10.0   ! T0 (Celsius)!
+  Fluidity Parameter = Real 30.986    ! Bn(T0) to match what we used for inversion
+  Limit Temperature = Real -10.0        ! TL  (Celsius)!
+  Activation Energy 1 = Real 6.0e4     ! different from elmer/ice example to match Cuffey and Patterson
+  Activation Energy 2 = Real 1.39e5 
+  Viscosity = Real 1.0
+
+  Viscosity File = FILE "040010010.Va"
+
+  Isotropic = Logical False !If set to true Glen flow law (no need to defined Fabric)
+
+!!!! For Fabric Solver
+  Interaction Parameter = Real 0.06 !alpha                                
+  Diffusion Parameter = Real {rc}   ! Diffusion term. To account for other phenomena than grain rotation. By default set to 0 if not defined
+
+  Density = Real $rhoi
+   Temp Heat Capacity = Variable Temp
+    Real MATC "capacity(tx)*yearinsec^2"
+   Temp Heat Conductivity = Variable Temp
+    Real MATC "conductivity(tx)*yearinsec*1.0E-06"
+   Temp Upper Limit = Variable AIFlow 3
+         Real MATC "pressuremeltingpoint(tx)"
+    Temp Lower Limit = Real 0.0
+
+   FlowWidth = Variable Coordinate 1
+        Real Procedure "SIA_BC" "{convn}"
+End
+
+!%%%%%%%%%%%%%%%%%%%%%      Initial Condition
+Initial Condition 1
+  Fabric 1 = Variable coordinate 2
+    Real Procedure "input_data" "Fabric1FullIni"  !a2_11
+  Fabric 2 = Variable coordinate 2
+    Real Procedure "input_data" "Fabric2FullIni"  !a2_11
+  Fabric 3 = Variable coordinate 2
+    Real Procedure "input_data" "Fabric3FullIni"  !a2_11
+  Fabric 4 = Real 0.               !a2_23
+  Fabric 5 = Real 0.               !a2_13
+
+  AIFlow 1 = Real 0.0              ! u_1
+  AIFlow 2 = Real 0.0              ! u_2
+  AIFlow 3 = Real 0.0              ! p for 2D u_3 for 3D
+
+  Flux = Real 0.04
+
+  Age = Variable Coordinate 1
+    Real Procedure "input_data" "AgeFullIni"
+  DGAge = Variable Coordinate 1
+    Real Procedure "input_data" "AgeFullIni"
+  Temp = Variable Coordinate 2
+     Real Procedure "input_data" "TFullIni"
+  Temp Homologous = Variable Coordinate 2
+     Real Procedure "input_data" "TCFullIni"
+
+  {DUDY_LINE}
+  ROC = Real 1.0e16
+  OOP13 = Real 0.0
+  OOP23 = Real 0.0
+
+   FlowWidth = Variable Coordinate 1
+        Real Procedure "SIA_BC" "{convn}"
+
+  SC = Variable Coordinate 1
+    Real MATC "slidingcoeff(tx)"
+End
+
+Initial Condition 2
+  "Zs Top" = Variable Coordinate 1
+    Real Procedure "ElmerIceUSF" "ZsTopIni"
+End
+
+!%%%%%%%%%%%%%%%%%%%%%      Solvers
+Solver 1
+  Equation = AIFlow
+  Variable = AIFlow
+  Variable DOFs = 3                        !3 for 2D -- 4 for 3D
+
+  Exported Variable 1 = Fabric             !Define Fabric Variable !!Mandatory if Isotropic=False
+  Exported Variable 1 DOFS = Integer 5
+
+  Exported Variable 2 =  StrainRate        ! Compute SR
+  Exported Variable 2 DOFS = Integer 4     !4 in 2D  6 in 3D (11,22,33,12,23,31)
+
+  Exported Variable 3 =  DeviatoricStress  ! Compute Stresses
+  Exported Variable 3 DOFS = Integer 4     !4 in 2D  6 in 3D  (11,22,33,12,23,31)
+
+  Exported Variable 4 =  Spin              ! Compute Spin
+  Exported Variable 4 DOFS = Integer 1     !1 in 2D  3 in 3D (12,23,31)
+
+  Exported Variable 5 = -dofs 1 ROC
+  Exported Variable 6 = -dofs 1 OOP23
+  Exported Variable 7 = -dofs 1 dudy
+  Exported Variable 8 = -dofs 1 FlowWidth
+  Exported Variable 9 = -dofs 6 EigenV
+  Exported Variable 10 = -dofs 1 SC
+
+  Procedure = "ElmerIceSolvers" "AIFlowSolver_nlS2"
+
+  Temperature Solution Name = String "Temp Homologous"
+
+  Linear System Solver = Direct
+  Linear System Direct Method = umfpack
+
+! linear flow law (exponent=1) => no need for non lin iters.
+  Nonlinear System Max Iterations = 15
+  Nonlinear System Convergence Tolerance  = 1.0e-6
+  Nonlinear System Newton After Iterations = 15
+  Nonlinear System Newton After Tolerance = 1.0e-06
+  Nonlinear System Relaxation Factor = 0.5
+
+  Steady State Convergence Tolerance = Real 1.0e-5
+
+End
+
+!!!!!Fabric Solver
+Solver 2
+  Equation = Fabric
+  Variable = -nooutput Compfab    ! dumy variable
+  Variable DOFs = 1               !FabricSolver compute each variable independently, Picard Type iterations
+  ! Exec Solver = Never
+
+  {oop_lines}
+
+  Procedure = "ElmerIceSolvers" "FabricSolver"
+  Discontinuous Galerkin = Logical True
+
+  Linear System Solver = Direct
+  Linear System Direct Method = umfpack
+
+  Nonlinear System Max Iterations = 20
+  Nonlinear System Newton After Iterations = 20
+  Nonlinear System Newton After Tolerance = 1.0e-7
+  Nonlinear System Convergence Tolerance  = 1.0e-7
+  Nonlinear System Relaxation Factor = 1.00
+
+  Steady State Convergence Tolerance = Real 1.0e-5
+End
+
+Solver 3
+   Equation = "Free Surface Top"
+   Variable = String "Zs Top"
+   Variable DOFs =  1
+   Exported Variable 1 = String "Zs Top Residual"
+   Exported Variable 1 DOFs = 1
+
+   
+   Procedure = "FreeSurfaceSolver" "FreeSurfaceSolver"
+   ! Before Linsolve = "EliminateDirichlet" "EliminateDirichlet"
+
+   Linear System Solver = Direct
+   Linear System Max Iterations = 1500
+   Linear System Convergence Tolerance = Real 1.0e-9
+   Linear System Abort Not Converged = True
+   Linear System Residual Output = 1
+
+   Nonlinear System Max Iterations = 100
+   Nonlinear System Convergence Tolerance  = 1.0e-8
+   Nonlinear System Relaxation Factor = 0.50
+   Nonlinear System Abort Not Converged = Logical True
+
+   Steady State Convergence Tolerance = 1.0e-5
+
+   Stabilization Method = Bubbles    
+   Apply Dirichlet = Logical False 
+
+   Free Surface Relaxation Factor = Real 1.0   
+   Use Accumulation = Logical True
+   Normal Flux = Logical False    
+End
+
+Solver 4
+  Equation = DeformationalHeat
+  Variable = W
+  Variable DOFs = 1
+  procedure =  "ElmerIceSolvers" "DeformationalHeatSolver"
+  Linear System Solver = direct
+  Linear System direct Method = mumps
+  Exec Solver = "After Timestep"
+  Mumps percentage increase working space = integer 200
+
+  Flow Solver Name = String "AIFlow"
+End
+
+Solver 5
+  Equation = String "Homologous Temperature Equation"
+  Procedure =  File "ElmerIceSolvers" "TemperateIceSolver"
+  ! Comment next line in parallel, as EliminateDirichlet does
+  ! not work in parallel
+  !------------------------------------------------------------
+  Variable = String "Temp"
+  Variable DOFs = 1
+  Exec Solver = "After Timestep"
+  !Linear System Solver = Direct
+  !Linear System Direct Method = mumps
+  !mumps percentage increase working space = integer 60
+
+  Linear System Solver = "Iterative"
+  Linear System Iterative Method = "BiCGStab"
+  Linear System Max Iterations = 5000
+  Linear System Convergence Tolerance = 1.0E-09
+  Linear System Abort Not Converged = True
+  Linear System Preconditioning = "ILU1"
+  Linear System Residual Output = 0
+  Steady State Convergence Tolerance = 1.0E-05
+  Nonlinear System Convergence Tolerance = 1.0E-08
+  Nonlinear System Max Iterations = 50
+  Nonlinear System Relaxation Factor = Real 8.0E-01
+  ! uses the contact algorithm (aka Dirichlet algorithm)
+  !-----------------------------------------------------
+  Apply Dirichlet = Logical True
+  Stabilize = True
+
+  Flow Solution Name = String "AIFlow"
+  Flow Solver Name = String "AIFlow"
+  Flow Solution = String "AIFlow"
+  ! those two variables are needed in order to store
+  ! the relative or homologous temperature as well
+  ! as the residual
+  !-------------------------------------------------
+  Exported Variable 1 = String "Temp Homologous"
+  Exported Variable 1 DOFs = 1
+  Exported Variable 2 = String "Temp Residual"
+  Exported Variable 2 DOFs = 1
+  Exported Variable 3 = String "Flux"
+  Exported Variable 3 DOFs = 1
+End
+
+Solver 6
+  Equation = "AdvReact"
+  Exec Solver = "After Timestep"
+  Procedure = File "AdvectionReaction" "AdvectionReactionSolver"
+  ! this is the DG variable, which is not part of the output
+  Variable =  -nooutput "DGAge"
+  ! this tells that the solver is run on DG mesh
+  Discontinuous Galerkin = Logical True
+  ! the solver can account for upper and lower limits of the variable
+  ! imposed by formulation of an variational inequality (VI)
+  ! next line switches the VI to be accounted for
+  Limit Solution = Logical True
+
+  Linear System Solver = Iterative
+  Linear System Iterative Method = BiCGStab
+  Linear System Max Iterations  = 1000
+  Linear System Preconditioning = ILU1
+  Linear System Convergence Tolerance = 1.0e-06
+  ! Variational inequality makes it a non-linear problem
+  Nonlinear System Max Iterations = 40
+  Nonlinear System Min Iterations = 2
+  Nonlinear System Convergence Tolerance = 1.0e-04
+
+  ! This is the variable that is used to interpolate
+  ! the DG solution to the regular FEM mesh in order
+  ! to get a correct output
+  Exported Variable 1 = Age
+  Exported Variable 1 DOFS = 1
+End
+
+Solver 7
+  Equation = "Mesh Update"
+  Exec Solver = "After Timestep"
+
+  Linear System Solver = "Direct"
+  Linear System Direct Method = umfpack
+
+  Steady State Convergence Tolerance = 1.0e-04
+End
+
+Solver 8
+   Exec Solver = "Before Simulation"
+   Equation = "Normal vector"
+   Variable = "Normal Vector"   
+   Variable DOFs = 2
+   Optimize Bandwidth = Logical False 
+   Procedure = "ElmerIceSolvers" "ComputeNormalSolver"
+   ComputeAll = Logical True
+End
+
+Solver 9
+  Equation = "ExportVertically"
+  Procedure = File "ElmerIceSolvers" "ExportVertically"
+  Variable = String "ExportedAIFlow"
+  Variable DOFs = 1
+  Linear System Solver = Iterative
+  Linear System Iterative Method = BiCGStab
+  Linear System Max Iterations  = 1000
+  Linear System Preconditioning = ILU1
+  Linear System Convergence Tolerance = 1.0e-06
+End
+
+Solver 10
+  Equation = "UpdateExport"
+    Procedure = File "ElmerIceSolvers" "UpdateExport"
+  Variable = -nooutput "dumy"
+
+  Exported Variable 1 = -dofs 1 OOP13
+End
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+Equation 1
+  Active Solvers(9)= 1 2 4 5 6 7 8 9 10
+  Flow Solution Name = String "AIFlow"
+  Convection = String Computed
+End
+
+Equation 2
+  Active Solvers(1)= 3
+  Flow Solution Name = String "AIFlow"
+  Convection = String Computed
+End
+
+!%%%%%%%%%%%%%%%%%%%%%      Boundary Condition
+Boundary Condition 1
+  Target Boundaries = 3
+  Body id = 2
+  name= String 'top'
+  ! AIFlow 2 = Real -0.1e0
+  Fabric 1 = Real 0.33333333333333 !a2_11
+  Fabric 2 = Real 0.33333333333333 !a2_22
+  Fabric 3 = Real 0.               !a2_12
+  Fabric 4 = Real 0.               !a2_23
+  Fabric 5 = Real 0.               !a2_13
+
+  DGAge = Real 0.0
+
+  ExportedAIFlow = Equals AIFlow 1
+
+  Mesh Update 1 = Real 0.0
+  Mesh Update 2 = Variable Zs Top
+     Real Procedure "ElmerIceUSF" "ZsTopMzsIni"
+
+  Temp = Real 248.15
+End
+
+Boundary Condition 2
+  Target Boundaries = 1
+  name= String 'bottom'
+
+  Compute Normals = Logical True
+  Normal-Tangential AIFlow = Logical True
+  AIFlow Force BC = Logical True
+  AIFlow 1 = Real {bm_val} ! Nonzero to keep age finite
+  ! AIFlow 2 = Real 10. ! Nonzero to keep age finite
+  AIFlow Slip Coeff 2 = Variable Coordinate 1
+    Real MATC "slidingcoeff(tx)"
+  Mesh Update 1 = Real 0.0
+  Mesh Update 2 = Real 0.0
+  ! Temperature Conditions
+  Temp Flux BC = Logical True
+  Temp Heat Flux = Real $0.04*yearinsec*1.0E-6
+  Temp Load = Variable SC
+    Real Procedure "/home/dal22/sw/ElmerReplacements/lilien_lib.so" "getFrictionLoadsLinearFric"
+End
+
+Boundary Condition 3
+  Target Boundaries = 4
+  name = string 'left'
+
+  AIFlow 1 = Real 0.0
+
+  Mesh Update 1 = Real 0.0
+  ! Mesh Update 2 = Real 0.0
+End
+
+
+Boundary Condition 4
+  Target Boundaries = 2
+  name = string 'right'
+
+  AIFlow 1 = Real 60.0
+  AIFLow 2 = Variable Coordinate 2
+       REAL Procedure "SIA_BC.so" "{VFUNC}"
+
+  Mesh Update 1 = Real 0.0
+  ! Mesh Update 2 = Real 0.0
+End
